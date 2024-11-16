@@ -1,0 +1,11 @@
+streamlit
+matplotlib
+seaborn
+urlextract
+wordcloud
+pandas
+
+#=================extra packages maine add kiye hai=================================
+
+#--chatbot requirements--
+openai

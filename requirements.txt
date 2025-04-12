@@ -6,7 +6,7 @@ wordcloud
 pandas
 nltk
 collection
-
+plotly
 
 #--chatbot requirements--
 # openai

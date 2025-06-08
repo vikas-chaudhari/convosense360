@@ -10,6 +10,18 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 
+# for cohere api
+import json
+import os
+from dotenv import load_dotenv
+from chatbot import textual_analysis
+
+# Load environment variables from .env file
+load_dotenv()
+
+# requirements for sentiment analysis
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
 nltk.download('vader_lexicon')
 st.sidebar.title("Whatsapp Chat Analyzer")
 
@@ -22,6 +34,7 @@ if uploaded_file is not None:
 
     if "show_normal_analysis" not in st.session_state:
         st.session_state.show_normal_analysis = False
+
     if "show_summarization" not in st.session_state:
         st.session_state.show_summarization = False
 
@@ -122,6 +135,33 @@ if uploaded_file is not None:
         fig = px.bar(most_common_df, x=1, y=0, orientation='h', labels={"0": "Words", "1": "Count"}, title="Most Common Words")
         fig.update_layout(yaxis={'categoryorder': 'total ascending'})
         st.plotly_chart(fig)
+        
+
+        #============================ textual insights of normal analysis =================
+        # # === TEXTUAL SUMMARY BASED ON PLOTTED INSIGHTS ===
+        st.subheader("🧠 Smart Textual Summary")
+
+        stats = {
+            "total_messages": num_messages,
+            "total_words": words,
+            "media_shared": num_media_messages,
+            "links_shared": num_links,
+            "most_common_words": most_common_df.head(10).values.tolist(),
+            "most_busy_day": helper.week_activity_map(selected_user, df).idxmax(),
+            "most_busy_month": helper.month_activity_map(selected_user, df).idxmax(),
+        }
+
+        if selected_user == 'Overall':
+            busy_users, _ = helper.most_busy_users(df)
+            stats["most_busy_users"] = busy_users.head(5).to_dict()
+
+        # Initialize Cohere Client
+        
+        
+        with st.spinner("Generating enhanced textual summary..."):
+            st.markdown("#### Enhanced Summary")
+            st.success(textual_analysis(stats))  # Use message.content[0].text to get the generated text
+            
 
 
 # ====================================== CHAT SUMMARIZATION =============================================================
@@ -130,27 +170,49 @@ if uploaded_file is not None:
         content = chatbot.summarize(df)
         st.write(content)
 
-
 # ====================================== SENTIMENT ANALYSIS =============================================================
+    from deep_translator import GoogleTranslator
+
+    # Assuming: sentiment_helper and sentiment_preprocessor are already imported
     if st.session_state.show_sentiment:
         st.title("Sentiment Analysis")
+
+        # Decode uploaded file
         bytes_data = uploaded_file.getvalue()
         df = bytes_data.decode("utf-8")
         data = sentiment_preprocessor.Preprocess(df)
-        from nltk.sentiment.vader import SentimentIntensityAnalyzer
+
+        translator = GoogleTranslator(source='hi', target='en')
         sentiments = SentimentIntensityAnalyzer()
+        
+        # =========================================
+        def safe_translate(msg):
+            try:
+                if isinstance(msg, str) and msg.strip():
+                    result = translator.translate(msg)
+                    print(result)
+                    return result
+                else:
+                    return msg       
+            except Exception:
+                return msg
 
-        data["po"] = [sentiments.polarity_scores(i)["pos"] for i in data["message"]]
-        data["ne"] = [sentiments.polarity_scores(i)["neg"] for i in data["message"]]
-        data["nu"] = [sentiments.polarity_scores(i)["neu"] for i in data["message"]]
+        # Translate Hinglish to English
+        data["translated"] = data["message"].apply(safe_translate)
+        # =========================================
 
+        # Apply VADER on translated messages
+        data["po"] = [sentiments.polarity_scores(i)["pos"] for i in data["translated"]]
+        data["ne"] = [sentiments.polarity_scores(i)["neg"] for i in data["translated"]]
+        data["nu"] = [sentiments.polarity_scores(i)["neu"] for i in data["translated"]]
+
+        # Determine overall sentiment value
         def sentiment(d):
             if d["po"] >= d["ne"] and d["po"] >= d["nu"]:
                 return 1
             if d["ne"] >= d["po"] and d["ne"] >= d["nu"]:
                 return -1
-            if d["nu"] >= d["po"] and d["nu"] >= d["ne"]:
-                return 0
+            return 0
 
         data['value'] = data.apply(lambda row: sentiment(row), axis=1)
 
@@ -158,24 +220,27 @@ if uploaded_file is not None:
         user_list.sort()
         user_list.insert(0, "Overall")
 
-        if st.session_state.show_sentiment:
-            selected_user = st.sidebar.selectbox("Show analysis wrt", user_list, key="sentiment_analysis_user_selector")
+        selected_user = st.sidebar.selectbox("Show analysis wrt", user_list, key="sentiment_analysis_user_selector")
 
         if st.sidebar.button("Show Analysis"):
             for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
                 st.markdown(f"### Monthly Activity Map ({label})")
                 busy_month = sentiment_helper.month_activity_map(selected_user, data, sentiment_value)
-                fig = px.bar(x=busy_month.index, y=busy_month.values,
-                             labels={'x': 'Month', 'y': 'Messages'},
-                             title=f"Monthly Activity - {label}", color_discrete_sequence=[color])
+                # Fix: Create DataFrame from Series
+                df_month = pd.DataFrame({'month': busy_month.index, 'messages': busy_month.values})
+                fig = px.bar(df_month, x='month', y='messages',
+                                labels={'month': 'Month', 'messages': 'Messages'},
+                                title=f"Monthly Activity - {label}", color_discrete_sequence=[color])
                 st.plotly_chart(fig)
 
             for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
                 st.markdown(f"### Daily Activity Map ({label})")
                 busy_day = sentiment_helper.week_activity_map(selected_user, data, sentiment_value)
-                fig = px.bar(x=busy_day.index, y=busy_day.values,
-                             labels={'x': 'Day', 'y': 'Messages'},
-                             title=f"Daily Activity - {label}", color_discrete_sequence=[color])
+                # Fix: Create DataFrame from Series
+                df_day = pd.DataFrame({'day': busy_day.index, 'messages': busy_day.values})
+                fig = px.bar(df_day, x='day', y='messages',
+                                labels={'day': 'Day', 'messages': 'Messages'},
+                                title=f"Daily Activity - {label}", color_discrete_sequence=[color])
                 st.plotly_chart(fig)
 
             for label, sentiment_value in zip(["Positive", "Neutral", "Negative"], [1, 0, -1]):
@@ -213,7 +278,11 @@ if uploaded_file is not None:
                 for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
                     st.markdown(f"### Most {label} Users")
                     x = data['user'][data['value'] == sentiment_value].value_counts().head(10)
-                    fig = px.bar(x=x.index, y=x.values, labels={'x': 'User', 'y': 'Messages'}, title=f"Top {label} Users", color_discrete_sequence=[color])
+                    # Fix: Create DataFrame from Series
+                    df_users = pd.DataFrame({'user': x.index, 'count': x.values})
+                    fig = px.bar(df_users, x='user', y='count', 
+                            labels={'user': 'User', 'count': 'Messages'}, 
+                            title=f"Top {label} Users", color_discrete_sequence=[color])
                     st.plotly_chart(fig)
 
             for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
@@ -228,8 +297,122 @@ if uploaded_file is not None:
                 try:
                     most_common_df = sentiment_helper.most_common_words(selected_user, data, sentiment_value)
                     st.markdown(f"### {label} Words")
-                    fig = px.bar(most_common_df, x=1, y=0, orientation='h', labels={"0": "Words", "1": "Count"}, title=f"Most Common {label} Words", color_discrete_sequence=[color])
+                    fig = px.bar(most_common_df, x=1, y=0, orientation='h', 
+                            labels={"0": "Words", "1": "Count"}, 
+                            title=f"Most Common {label} Words", color_discrete_sequence=[color])
                     fig.update_layout(yaxis={'categoryorder': 'total ascending'})
                     st.plotly_chart(fig)
                 except:
                     st.image('error.webp')
+
+# # ====================================== yaha tak ka code comment kiya hai niche ka alag hai kuch=============================================================
+
+
+
+
+
+
+
+
+#============================================================================== 
+    # if st.session_state.show_sentiment:
+    #     st.title("Sentiment Analysis")
+    #     bytes_data = uploaded_file.getvalue()
+    #     df = bytes_data.decode("utf-8")
+    #     data = sentiment_preprocessor.Preprocess(df)
+    #     from nltk.sentiment.vader import SentimentIntensityAnalyzer
+    #     sentiments = SentimentIntensityAnalyzer()
+
+    #     data["po"] = [sentiments.polarity_scores(i)["pos"] for i in data["message"]]
+    #     data["ne"] = [sentiments.polarity_scores(i)["neg"] for i in data["message"]]
+    #     data["nu"] = [sentiments.polarity_scores(i)["neu"] for i in data["message"]]
+
+    #     def sentiment(d):
+    #         if d["po"] >= d["ne"] and d["po"] >= d["nu"]:
+    #             return 1
+    #         if d["ne"] >= d["po"] and d["ne"] >= d["nu"]:
+    #             return -1
+    #         if d["nu"] >= d["po"] and d["nu"] >= d["ne"]:
+    #             return 0
+
+    #     data['value'] = data.apply(lambda row: sentiment(row), axis=1)
+
+    #     user_list = data['user'].unique().tolist()
+    #     user_list.sort()
+    #     user_list.insert(0, "Overall")
+
+    #     if st.session_state.show_sentiment:
+    #         selected_user = st.sidebar.selectbox("Show analysis wrt", user_list, key="sentiment_analysis_user_selector")
+
+    #     if st.sidebar.button("Show Analysis"):
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             st.markdown(f"### Monthly Activity Map ({label})")
+    #             busy_month = sentiment_helper.month_activity_map(selected_user, data, sentiment_value)
+    #             fig = px.bar(x=busy_month.index, y=busy_month.values,
+    #                          labels={'x': 'Month', 'y': 'Messages'},
+    #                          title=f"Monthly Activity - {label}", color_discrete_sequence=[color])
+    #             st.plotly_chart(fig)
+
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             st.markdown(f"### Daily Activity Map ({label})")
+    #             busy_day = sentiment_helper.week_activity_map(selected_user, data, sentiment_value)
+    #             fig = px.bar(x=busy_day.index, y=busy_day.values,
+    #                          labels={'x': 'Day', 'y': 'Messages'},
+    #                          title=f"Daily Activity - {label}", color_discrete_sequence=[color])
+    #             st.plotly_chart(fig)
+
+    #         for label, sentiment_value in zip(["Positive", "Neutral", "Negative"], [1, 0, -1]):
+    #             try:
+    #                 st.markdown(f"### Weekly Activity Heatmap ({label})")
+    #                 user_heatmap = sentiment_helper.activity_heatmap(selected_user, data, sentiment_value)
+    #                 fig = go.Figure(data=go.Heatmap(
+    #                     z=user_heatmap.values,
+    #                     x=user_heatmap.columns,
+    #                     y=user_heatmap.index,
+    #                     colorscale='Viridis'))
+    #                 fig.update_layout(title=f"Weekly Heatmap - {label}")
+    #                 st.plotly_chart(fig)
+    #             except:
+    #                 st.image('error.webp')
+
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             st.markdown(f"### Daily Timeline ({label})")
+    #             daily_timeline = sentiment_helper.daily_timeline(selected_user, data, sentiment_value)
+    #             fig = px.line(daily_timeline, x='only_date', y='message', title=f"Daily Timeline - {label}", markers=True, color_discrete_sequence=[color])
+    #             st.plotly_chart(fig)
+
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             st.markdown(f"### Monthly Timeline ({label})")
+    #             timeline = sentiment_helper.monthly_timeline(selected_user, data, sentiment_value)
+    #             fig = px.line(timeline, x='time', y='message', title=f"Monthly Timeline - {label}", markers=True, color_discrete_sequence=[color])
+    #             st.plotly_chart(fig)
+
+    #         if selected_user == 'Overall':
+    #             for label, sentiment_value in zip(["Positive", "Neutral", "Negative"], [1, 0, -1]):
+    #                 st.markdown(f"### Most {label} Contribution")
+    #                 df_sent = sentiment_helper.percentage(data, sentiment_value)
+    #                 st.dataframe(df_sent)
+
+    #             for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #                 st.markdown(f"### Most {label} Users")
+    #                 x = data['user'][data['value'] == sentiment_value].value_counts().head(10)
+    #                 fig = px.bar(x=x.index, y=x.values, labels={'x': 'User', 'y': 'Messages'}, title=f"Top {label} Users", color_discrete_sequence=[color])
+    #                 st.plotly_chart(fig)
+
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             try:
+    #                 st.markdown(f"### {label} Word Cloud")
+    #                 df_wc = sentiment_helper.create_wordcloud(selected_user, data, sentiment_value)
+    #                 st.image(df_wc.to_array())
+    #             except:
+    #                 st.image('error.webp')
+
+    #         for label, sentiment_value, color in zip(["Positive", "Neutral", "Negative"], [1, 0, -1], ['green', 'grey', 'red']):
+    #             try:
+    #                 most_common_df = sentiment_helper.most_common_words(selected_user, data, sentiment_value)
+    #                 st.markdown(f"### {label} Words")
+    #                 fig = px.bar(most_common_df, x=1, y=0, orientation='h', labels={"0": "Words", "1": "Count"}, title=f"Most Common {label} Words", color_discrete_sequence=[color])
+    #                 fig.update_layout(yaxis={'categoryorder': 'total ascending'})
+    #                 st.plotly_chart(fig)
+    #             except:
+    #                 st.image('error.webp')

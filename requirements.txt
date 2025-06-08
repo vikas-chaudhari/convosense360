@@ -6,9 +6,15 @@ wordcloud
 pandas
 nltk
 collection
-
+plotly
 
 #--chatbot requirements--
 # openai
 google-generativeai>=0.7.2
 python-dotenv
+cohere==4.57
+
+# sentiemt analysis requirements here ==============
+googletrans==4.0.0-rc1
+
+deep-translator

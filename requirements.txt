@@ -18,3 +18,12 @@ cohere==4.57
 googletrans==4.0.0-rc1
 
 deep-translator
+
+
+textblob 
+emoji
+networkx
+
+numpy 
+scikit-learn 
+scipy
